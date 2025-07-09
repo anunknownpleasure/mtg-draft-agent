@@ -1,0 +1,5 @@
+# Data storage -- don't upload data to GitHub!
+MTGdraft
+
+# Ignore caches at all locations
+__pycache__/
