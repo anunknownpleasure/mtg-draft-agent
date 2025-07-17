@@ -1,15 +1,7 @@
-# API requests
-import requests
+import numpy as np
 
-# Utilities
-import os
-import pathlib
-from time import time, sleep
-import json
-
-# Warnings
-import warnings
-
+from itertools import product
+from time import time
 
 ###############
 # Functions to neatly print card attributes
@@ -80,71 +72,174 @@ def print_card_attributes(card):
 
 
 ###############
-# Scraping Scryfall
+# Reading draft history
 ###############
-headers_ = {
-    "User-Agent": "2025-dl-mtg-draft",  # Name of our app
-    "Accept": "application/json",  # Return format in json
-}
-scryfall_url_ = "https://api.scryfall.com/cards/search"
-
-
-def get_expansion_from_scryfall(expansion, delay=50e-3, return_json=False):
+def get_cards_from_draft_df(draftdata, prefix="pack_card_"):
     """
-    Get all cards from a specific expansion.
-    expansion: Expansion code (e.g., 'm21' for Magic 2021)
-    return: List of cards in the expansion
+    Gets the list of cards in an expansion by looking at the column names
+    of draftdata. draftdata has a one-hot encoding of the cards seen and
+    picked in a draft, and it stores them in columns named
+    {prefix}_{card_name}. We remove that prefix and make a list of the card
+    names.
 
-    Note: This function handles pagination and rate limits.
+    Args:
+    - draftdata: A Dataframe of played drafts from 17Lands
+    - prefix: If the format were to change, you can choose the new prefix
+              here
+
+    Returns:
+    - card_names: List of card names
+    - card_to_idx, idx_to_cards: Dictionaries that translate between cards
+                                 and their index in the card_names list.
     """
-    if delay < 50e-3:
-        warnings.warn(
-            f"delay ({delay}) is less than 50 milliseconds. Scryfall recommends a delay of 50-100 milliseconds between requests to avoid rate limiting."
-        )
+    # The card names appear in the columns that start with a fixed prefix
+    card_names = draftdata.filter(regex=prefix).columns
+    card_names = list(card_names)
 
-    # Response has several pages, we loop over them
-    has_more = True
-    page_num = 1
+    # Remove prefix
+    card_names = [name.replace(prefix, "") for name in card_names]
 
-    responses = []  # Full response from the API (if needed)
-    responses_json = []  # Contains only the json files
-    cards = []  # Contains only the cards
-    while has_more:
-        params = {"q": f"set:{expansion}", "page": str(page_num)}
-        response = requests.get(scryfall_url_, headers=headers_, params=params)
+    # Dictionaries to translate between cards and indices
+    card_to_idx = {}
+    idx_to_card = {}
 
-        # Scryfall asks us to add a 50-100 millisecond delay between requests
-        sleep(delay)
+    for idx, card in enumerate(card_names):
+        card_to_idx[card] = idx
+        idx_to_card[idx] = card
 
-        # Store full responses if we need them
-        if return_json:
-            responses.append(response)
-            responses_json.append(response.json())
-
-        # Store the cards
-        cards.extend(response.json()["data"])
-
-        # Check if there are more pages
-        has_more = response.json()["has_more"]
-        page_num += 1
-
-    if return_json:
-        return cards, responses, responses_json
-    else:
-        return cards
+    return card_names, card_to_idx, idx_to_card
 
 
-def get_saved_expansion(expansion):
+def count_to_list(row, prefix):
     """
-    Get the cards from a saved expansion file.
-    expansion: Expansion code (e.g., 'm21' for Magic 2021)
-    return: List of cards in the expansion
+    Turns a vector of counts into a list of card names, each one
+    repeated as many times as the vector's entry. We obtain the
+    name of the cards by extracting the names of the columns with
+    non-zero value and removing the given column prefix from it.
+
+    Args:
+    - row: A row of a 17Lands dataframe containing draft histories.
+           The row should correspond to specific pick and pack
+           numbers.
+    - prefix: Either 'pack_card_' to count the cards seen in each
+              round of the draft, or 'pool_' to count the cards in
+              the player's pool (i.e. cards chosen in previous
+              round).
     """
-    folder = "MTGdraft/Scryfall-data/card-sets"
-    filename = f"expansions/{expansion}.json"
-    path = pathlib.Path(folder, filename)
+    # Filter only columns with the input prefix and tranpose
+    df_prefix = row.filter(regex=prefix)
+    df_prefix = df_prefix.transpose()
 
-    with open(path, "r") as file:
-        cards = json.load(file)
+    # Get rows whose entry is not 0
+    idx_orig = row.index[0]
+    column_list = df_prefix[df_prefix[idx_orig] > 0].index
 
-    return cards
+    # Remove prefix and add repetitions
+    card_list = []
+    for col_name in column_list:
+        card_name = col_name.replace(prefix, "")
+        repetitions = row.loc[idx_orig, col_name]
+
+        card_list.extend([card_name] * repetitions)
+
+    return card_list
+
+
+def get_played_drafts(
+    draftdata,
+    card_to_idx=None,
+    num_packs=3,
+    num_picks=14,
+    prefix_pack="pack_card_",
+    prefix_pool="pool_",
+):
+    """
+    Obtains lists representing played drafts.
+
+    Args:
+    - draftdata: A Dataframe of played drafts from 17Lands
+    - card_to_idx (optional): A card-index dictionary, as produced
+                              by get_cards_from_draft_df. If not given,
+                              we call the function.
+    - num_packs, num_picks: Number of packs and cards per pack. May change
+                            given the draft format.
+    - prefix_pack, prefix_pool: Prefixes of the column names in the 17Lands
+                                dataframes that contain cards in pack and
+                                cards in pool.
+
+    Returns:
+    - draft_ids: A list of the ids in draftdata that have complete data.
+    - drafts: A dictionary, indexed by the elements of draft_ids.
+      For each id, we have the following lists of length num_packs*num_picks.
+      If i is a turn number, these lists are:
+            - chosen[i]:  Index of card chosen in turn i
+            - options[i]: List of options in turn i
+            - pool[i]:    List of cards chosen up to turn i-1
+    """
+    # Get unique ids
+    draft_ids = draftdata["draft_id"].unique()
+
+    # Get columns with the player's options
+    pack_columns = draftdata.filter(regex=prefix_pack).columns
+    pack_columns = list(pack_columns)
+
+    # Get columns with the player's pool of cards
+    pool_columns = draftdata.filter(regex=prefix_pool).columns
+    pool_columns = list(pool_columns)
+
+    # Get the card-index dictionary if we don't already have it
+    if card_to_idx is None:
+        card_names, card_to_idx, idx_to_card = get_cards_from_draft_df(draftdata)
+
+    # Compile data for each draft_id
+    drafts = {}
+    for i, id in enumerate(draft_ids):
+        time_start = time()
+
+        # Get draft info for id
+        data_id = draftdata.loc[draftdata["draft_id"] == id, :]
+
+        # Check that we have the right amount of data
+        num_rows = data_id.shape[0]
+        if num_rows != num_packs * num_picks:
+            print(f"{i+1}/{len(draft_ids)}", end=": ")
+            print(
+                f"Draft incomplete. Only {num_rows} out of {num_packs*num_picks} rows. Skipping id {id}."
+            )
+            draft_ids = np.delete(draft_ids, i)
+
+            continue
+
+        # Build iterators to extract information in turn order
+        draft_turns = product(range(num_packs), range(num_picks))
+
+        chosen = []
+        options = []
+        pool = []
+        for pack_idx, pick_idx in draft_turns:
+            # Get row for the turn by filtering pack number, pick number, and draft id
+            df_turn = draftdata[
+                (draftdata["draft_id"] == id)
+                & (draftdata["pack_number"] == pack_idx)
+                & (draftdata["pick_number"] == pick_idx)
+            ]
+
+            # Get pick, cards in pack, and cards in pool
+            df_index = df_turn.index[0]
+            pick = df_turn.at[df_index, "pick"]
+            cards_in_pack = count_to_list(df_turn, prefix_pack)
+            cards_in_pool = count_to_list(df_turn, prefix_pool)
+
+            # Store results as indices
+            chosen.append(card_to_idx[pick])
+            options.append([card_to_idx[card] for card in cards_in_pack])
+            pool.append([card_to_idx[card] for card in cards_in_pool])
+
+        # Store results for the id
+        drafts[id] = (chosen, options, pool)
+
+        time_end = time()
+        dt = time_end - time_start
+        print(f"{i+1}/{len(draft_ids)}: {np.round(dt,3)}")
+
+    return drafts, draft_ids
