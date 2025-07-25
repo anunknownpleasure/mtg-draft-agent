@@ -1,6 +1,6 @@
 # Contains options and chosen functions
 
-# Options: returns the list of cards the player could have chosen on turn i
+# Options: returns the list of cards a player can choose in a given round
 
 import pandas as pd
 import numpy as np
@@ -25,6 +25,8 @@ def options(draft_data, pack, round_num, draft_id, pack_columns):
     
     return available_cards
 
+# Chosen: returns the card that was chosen by the player in the round
+
 
 def choice(draft_data, pack, round, id):
     
@@ -45,6 +47,6 @@ def choice(draft_data, pack, round, id):
 
 
 
-# Chosen: returns the card that was chosen by the player on turn i
+
 
 
