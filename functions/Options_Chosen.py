@@ -25,6 +25,8 @@ def options(draft_data, pack, round_num, draft_id, pack_columns):
     
     return available_cards
 
+# Chosen: returns the card that was chosen by the player on turn i
+
 
 def choice(draft_data, pack, round, id):
     
@@ -45,6 +47,6 @@ def choice(draft_data, pack, round, id):
 
 
 
-# Chosen: returns the card that was chosen by the player on turn i
+
 
 
