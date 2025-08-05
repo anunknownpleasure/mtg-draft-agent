@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 
 from itertools import product
 from time import time
@@ -154,13 +155,13 @@ def get_played_drafts(
     prefix_pool="pool_",
 ):
     """
-    Obtains lists representing played drafts.
+    Creates a dataframe with played drafts. Cards are tokenized with card_to_idx.
 
     Args:
     - draftdata: A Dataframe of played drafts from 17Lands
     - card_to_idx (optional): A card-index dictionary, as produced
                               by get_cards_from_draft_df. If not given,
-                              we call the function.
+                              we build it ourselves with get_cards_from_draft_df.
     - num_packs, num_picks: Number of packs and cards per pack. May change
                             given the draft format.
     - prefix_pack, prefix_pool: Prefixes of the column names in the 17Lands
@@ -168,13 +169,11 @@ def get_played_drafts(
                                 cards in pool.
 
     Returns:
-    - draft_ids: A list of the ids in draftdata that have complete data.
-    - drafts: A dictionary, indexed by the elements of draft_ids.
-      For each id, we have the following lists of length num_packs*num_picks.
-      If i is a turn number, these lists are:
-            - chosen[i]:  Index of card chosen in turn i
-            - options[i]: List of options in turn i
-            - pool[i]:    List of cards chosen up to turn i-1
+    - drafts: A dataframe that, for each draft_id and for each turn of the
+      draft, it has the following columns:
+            - pick: Card chosen in a given turn
+            - pack: Cards in pack in a given turn i
+            - pool: List of cards chosen up to turn i-1
     """
     # Get unique ids
     draft_ids = draftdata["draft_id"].unique()
@@ -192,7 +191,8 @@ def get_played_drafts(
         card_names, card_to_idx, idx_to_card = get_cards_from_draft_df(draftdata)
 
     # Compile data for each draft_id
-    drafts = {}
+    draft_list = []
+
     for i, id in enumerate(draft_ids):
         time_start = time()
 
@@ -213,9 +213,6 @@ def get_played_drafts(
         # Build iterators to extract information in turn order
         draft_turns = product(range(num_packs), range(num_picks))
 
-        chosen = []
-        options = []
-        pool = []
         for pack_idx, pick_idx in draft_turns:
             # Get row for the turn by filtering pack number, pick number, and draft id
             df_turn = draftdata[
@@ -230,16 +227,33 @@ def get_played_drafts(
             cards_in_pack = count_to_list(df_turn, prefix_pack)
             cards_in_pool = count_to_list(df_turn, prefix_pool)
 
-            # Store results as indices
-            chosen.append(card_to_idx[pick])
-            options.append([card_to_idx[card] for card in cards_in_pack])
-            pool.append([card_to_idx[card] for card in cards_in_pool])
+            # Store results
+            chosen = card_to_idx[pick]
+            pack = [card_to_idx[card] for card in cards_in_pack]
+            pool = [card_to_idx[card] for card in cards_in_pool]
 
-        # Store results for the id
-        drafts[id] = (chosen, options, pool)
+            row = {
+                "draft_id": id,
+                "pack_number": pack_idx,
+                "pick_number": pick_idx,
+                "pick": chosen,
+                "pack": pack,
+                "pool": pool,
+            }
+            draft_list.append(row)
 
         time_end = time()
         dt = time_end - time_start
         print(f"{i+1}/{len(draft_ids)}: {np.round(dt,3)}")
+    print()
 
-    return drafts, draft_ids
+    # Convert draft_list into DataFrame
+    time_start = time()
+    drafts = pd.DataFrame(
+        draft_list,
+        columns=["draft_id", "pack_number", "pick_number", "pick", "pack", "pool"],
+    )
+    time_end = time()
+    print(f"End: {np.round(dt,3)}")
+
+    return drafts
