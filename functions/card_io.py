@@ -206,7 +206,6 @@ def get_played_drafts(
             print(
                 f"Draft incomplete. Only {num_rows} out of {num_packs*num_picks} rows. Skipping id {id}."
             )
-            draft_ids = np.delete(draft_ids, i)
 
             continue
 
