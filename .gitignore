@@ -3,3 +3,5 @@ MTGdraft
 
 # Ignore caches at all locations
 __pycache__/
+
+figures/
